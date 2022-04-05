@@ -2,7 +2,7 @@
 {
     public class DomainMessage
     {
-        public DomainData Data { get; set; }
-        public DomainMetaData MetaData { get; set; }
+        public string Data { get; set; }
+        public string MetaData { get; set; }
     }
 }

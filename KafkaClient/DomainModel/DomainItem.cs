@@ -1,4 +1,5 @@
 ﻿using System;
+using Newtonsoft.Json;
 
 namespace KafkaMessagesExtractor.DomainModel
 {
@@ -9,5 +10,13 @@ namespace KafkaMessagesExtractor.DomainModel
         public DomainMessage Message { get; set; }
         public Guid Key { get; set; }
         public DateTime Timestamp { get; set; }
+
+        public override string ToString()
+        {
+            return JsonConvert.SerializeObject(this)
+                .Replace("\\\"", "\"")
+                .Replace("\"{", "{")
+                .Replace("}\"", "}");
+        }
     }
 }

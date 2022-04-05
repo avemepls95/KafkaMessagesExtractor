@@ -25,6 +25,13 @@ namespace KafkaMessagesExtractor.App
 
             var kafkaClient = new KafkaClient(Log.Logger);
             var messagesMetaDataItems = await kafkaClient.GetMessagesMetaData(host, topicName, CancellationToken.None);
+            while (messagesMetaDataItems is null)
+            {
+                Console.WriteLine($"Не удалось получить данные. Проверьте доступность/правильность указанных хоста и топика");
+                (host, topicName, searchValue) = GetInputData();
+                messagesMetaDataItems = await kafkaClient.GetMessagesMetaData(host, topicName, CancellationToken.None);
+            }
+
             var topicsSearchInfos = messagesMetaDataItems.Select(i => new TopicSearchInfo
             {
                 Partition = i.Partition,
@@ -67,8 +74,9 @@ namespace KafkaMessagesExtractor.App
                     lastMessagesFromPartitions.Add(partitionMessages.OrderBy(m => m.Timestamp).First());
                 }
 
+                var searchValueInUpperCase = searchValue.ToUpper();
                 var result = messagesFromAllPartitions
-                    .Where(m => JsonConvert.SerializeObject(m.Message.Data).Contains(searchValue))
+                    .Where(m => m.Message.Data.ToUpper().Contains(searchValueInUpperCase))
                     .ToArray();
 
                 scannedMessagesCount += grabMessagesCount;
@@ -81,7 +89,7 @@ namespace KafkaMessagesExtractor.App
                     Console.WriteLine("Результат:");
                     foreach (var domainItem in result)
                     {
-                        Console.WriteLine(JsonConvert.SerializeObject(domainItem) + Environment.NewLine);
+                        Console.WriteLine(domainItem + Environment.NewLine);
                     }
                 }
 
@@ -139,7 +147,9 @@ namespace KafkaMessagesExtractor.App
                     }
                 }
 
-                var topicsBasedOnSelectedHost = topics.Where(t => t.Host == hosts[hostSelectedIndex - 1]).ToArray();
+                var selectedHost = hosts[hostSelectedIndex - 1];
+                var topicsBasedOnSelectedHost = topics.Where(t => t.Host == selectedHost).ToArray();
+                var customTopicIndex = topicsBasedOnSelectedHost.Length + 1;
                 if (topicNameSelectedIndex < 1 || topicNameSelectedIndex > topicsBasedOnSelectedHost.Length)
                 {
                     Console.WriteLine(Environment.NewLine + "Выберите топик: ");
@@ -147,19 +157,35 @@ namespace KafkaMessagesExtractor.App
                     {
                         Console.WriteLine($"{i}. {topicsBasedOnSelectedHost[i - 1].Name}");
                     }
+                    Console.WriteLine($"{customTopicIndex}. Указать свой");
 
                     var hostSelectedIndexAsString = Console.ReadKey().KeyChar;
                     Console.WriteLine();
                     if (!int.TryParse(hostSelectedIndexAsString.ToString(), out topicNameSelectedIndex)
                         || topicNameSelectedIndex < 1
-                        || topicNameSelectedIndex > topicsBasedOnSelectedHost.Length)
+                        || topicNameSelectedIndex > topicsBasedOnSelectedHost.Length + 1)
                     {
                         Console.WriteLine("Некорректный индекс.");
                         continue;
                     }
                 }
 
-                selectedTopic = topicsBasedOnSelectedHost[topicNameSelectedIndex - 1];
+                if (topicNameSelectedIndex == customTopicIndex)
+                {
+                    Console.WriteLine("Введите название топика: ");
+                    var customTopicName = Console.ReadLine();
+                    if (string.IsNullOrWhiteSpace(customTopicName))
+                    {
+                        Console.WriteLine("Некорректное значение.");
+                        continue;
+                    }
+
+                    selectedTopic = new KafkaTopic { Host = selectedHost, Name = customTopicName };
+                }
+                else
+                {
+                    selectedTopic = topicsBasedOnSelectedHost[topicNameSelectedIndex - 1];
+                }
 
                 Console.Write(Environment.NewLine + "Искомый текст: ");
                 searchValue = Console.ReadLine();
@@ -175,7 +201,23 @@ namespace KafkaMessagesExtractor.App
             return (selectedTopic.Host, selectedTopic.Name, searchValue);
         }
 
-        static int GetGrabMessagesCount()
+        private static string GetCustomTopicName()
+        {
+            Console.WriteLine("Введите название топика: ");
+            var customTopicName = string.Empty;
+            // while (string.IsNullOrWhiteSpace(customTopicName))
+            // {
+                customTopicName = Console.ReadLine();
+                if (string.IsNullOrWhiteSpace(customTopicName))
+                {
+                    Console.WriteLine("Некорректное значение.");
+                }
+            // }
+
+            return customTopicName;
+        }
+
+        private static int GetGrabMessagesCount()
         {
             const string fileName = "count.txt";
             if (!File.Exists(fileName))
@@ -200,7 +242,7 @@ namespace KafkaMessagesExtractor.App
         static void SetupApplication()
         {
             Log.Logger = new LoggerConfiguration()
-                .WriteTo.File("consoleapp.log")
+                .WriteTo.File("app.log")
                 .CreateLogger();
 
             Console.OutputEncoding = Encoding.UTF8;

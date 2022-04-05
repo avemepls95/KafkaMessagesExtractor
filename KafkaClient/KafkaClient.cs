@@ -39,21 +39,6 @@ namespace KafkaMessagesExtractor
             foreach (var responseItem in restSharpResponse.Data)
             {
                 responseItem.Message = JsonConvert.DeserializeObject<ResponseMessage>(responseItem.Message.ToString());
-                var formattedResponseDataAsString = responseItem.Message.Data.Replace("\\", "");
-                ResponseData responseData;
-
-                try
-                {
-                    responseData = JsonConvert.DeserializeObject<ResponseData>(formattedResponseDataAsString) as ResponseData;
-                }
-                catch (Exception e)
-                {
-                    _logger.Error(e, $"Не удалось распарсить сообщение: {formattedResponseDataAsString}");
-                    outputMessagesContainer.Add("Не удалось распарсить одно из сообщений. См. логи.");
-                    continue;
-                }
-
-                var responseMetaData = responseItem.Message.MetaData as ResponseMetaData;
 
                 var domainItem = new DomainItem
                 {
@@ -61,8 +46,8 @@ namespace KafkaMessagesExtractor
                     Offset = responseItem.Offset,
                     Message = new DomainMessage
                     {
-                        Data = responseData.Adapt<DomainData>(),
-                        MetaData = responseMetaData.Adapt<DomainMetaData>()
+                        Data = responseItem.Message.Data,
+                        MetaData = JsonConvert.SerializeObject(responseItem.Message.MetaData)
                     },
                     Key = responseItem.Key,
                     Timestamp = responseItem.Timestamp
