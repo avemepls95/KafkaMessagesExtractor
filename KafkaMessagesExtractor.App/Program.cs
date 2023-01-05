@@ -7,7 +7,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using KafkaMessagesExtractor.App.Constants;
 using KafkaMessagesExtractor.DomainModel;
-using Newtonsoft.Json;
 using Serilog;
 
 namespace KafkaMessagesExtractor.App
@@ -21,92 +20,107 @@ namespace KafkaMessagesExtractor.App
             var grabMessagesCount = GetGrabMessagesCount();
             Console.WriteLine($"Шаг: {grabMessagesCount} сообщений");
 
-            var (host, topicName, searchValue) = GetInputData();
-
-            var kafkaClient = new KafkaClient(Log.Logger);
-            var messagesMetaDataItems = await kafkaClient.GetMessagesMetaData(host, topicName, CancellationToken.None);
-            while (messagesMetaDataItems is null)
-            {
-                Console.WriteLine($"Не удалось получить данные. Проверьте доступность/правильность указанных хоста и топика");
-                (host, topicName, searchValue) = GetInputData();
-                messagesMetaDataItems = await kafkaClient.GetMessagesMetaData(host, topicName, CancellationToken.None);
-            }
-
-            var topicsSearchInfos = messagesMetaDataItems.Select(i => new TopicSearchInfo
-            {
-                Partition = i.Partition,
-                CurrentLastOffset = i.LastOffset - grabMessagesCount
-            }).ToList();
-
-            var scannedMessagesCount = 0;
             while (true)
             {
-                Console.WriteLine("Поиск...");
+                var (host, topicName, searchValue) = GetInputData();
 
-                var lastMessagesFromPartitions = new List<DomainItem>();
-                var messagesFromAllPartitions = new List<DomainItem>();
-                foreach (var topicsSearchInfo in topicsSearchInfos)
+                var kafkaClient = new KafkaClient(Log.Logger);
+                var messagesMetaDataItems = await kafkaClient.GetMessagesMetaData(host, topicName, CancellationToken.None);
+                while (messagesMetaDataItems is null)
                 {
-                    var searchParameters = new SearchParameters
-                    {
-                        Url = host,
-                        TopicName = topicName,
-                        Partition = topicsSearchInfo.Partition,
-                        Offset = topicsSearchInfo.CurrentLastOffset,
-                        Count = grabMessagesCount
-                    };
+                    Console.WriteLine($"Не удалось получить данные. Проверьте доступность/правильность указанных хоста и топика");
+                    (host, topicName, searchValue) = GetInputData();
+                    messagesMetaDataItems = await kafkaClient.GetMessagesMetaData(host, topicName, CancellationToken.None);
+                }
 
-                    var outputMessagesContainer = new OutputMessagesContainer();
-                    var partitionMessages = await kafkaClient.FindAsync(
-                        searchParameters,
-                        outputMessagesContainer,
-                        CancellationToken.None);
+                var topicsSearchInfos = messagesMetaDataItems.Select(i => new TopicSearchInfo
+                {
+                    Partition = i.Partition,
+                    CurrentLastOffset = i.LastOffset - grabMessagesCount
+                }).ToList();
 
-                    if (outputMessagesContainer.Any())
+                var scannedMessagesCount = 0;
+                while (true)
+                {
+                    Console.WriteLine("Поиск...");
+
+                    var lastMessagesFromPartitions = new List<DomainItem>();
+                    var messagesFromAllPartitions = new List<DomainItem>();
+                    foreach (var topicsSearchInfo in topicsSearchInfos)
                     {
-                        foreach (var message in outputMessagesContainer)
+                        var searchParameters = new SearchParameters
                         {
-                            Console.WriteLine(message);
+                            Url = host,
+                            TopicName = topicName,
+                            Partition = topicsSearchInfo.Partition,
+                            Offset = topicsSearchInfo.CurrentLastOffset,
+                            Count = grabMessagesCount
+                        };
+
+                        var outputMessagesContainer = new OutputMessagesContainer();
+                        var partitionMessages = await kafkaClient.FindAsync(
+                            searchParameters,
+                            outputMessagesContainer,
+                            CancellationToken.None);
+
+                        if (outputMessagesContainer.Any())
+                        {
+                            foreach (var message in outputMessagesContainer)
+                            {
+                                Console.WriteLine(message);
+                            }
+                        }
+
+                        messagesFromAllPartitions.AddRange(partitionMessages);
+                        lastMessagesFromPartitions.Add(partitionMessages.OrderBy(m => m.Timestamp).First());
+                    }
+
+                    var searchValueInUpperCase = searchValue.ToUpper();
+                    var result = messagesFromAllPartitions
+                        .Where(m => m.Message.Data.ToUpper().Contains(searchValueInUpperCase))
+                        .ToArray();
+
+                    scannedMessagesCount += grabMessagesCount;
+                    if (!result.Any())
+                    {
+                        Console.WriteLine($"Нет результатов.");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Результат:");
+                        foreach (var domainItem in result)
+                        {
+                            Console.WriteLine(domainItem + Environment.NewLine);
                         }
                     }
 
-                    messagesFromAllPartitions.AddRange(partitionMessages);
-                    lastMessagesFromPartitions.Add(partitionMessages.OrderBy(m => m.Timestamp).First());
-                }
+                    var lastMessage = lastMessagesFromPartitions.OrderBy(p => p.Timestamp).Last();
+                    Console.WriteLine($"Всего просканировано {scannedMessagesCount} cообщений. Дата самого раннего: {lastMessage.Timestamp}");
 
-                var searchValueInUpperCase = searchValue.ToUpper();
-                var result = messagesFromAllPartitions
-                    .Where(m => m.Message.Data.ToUpper().Contains(searchValueInUpperCase))
-                    .ToArray();
-
-                scannedMessagesCount += grabMessagesCount;
-                if (!result.Any())
-                {
-                    Console.WriteLine($"Нет результатов.");
-                }
-                else
-                {
-                    Console.WriteLine("Результат:");
-                    foreach (var domainItem in result)
+                    const char continueKeyChar = 'y', changeParametersKeyChar = 't';
+                    Console.WriteLine(@$"
+{continueKeyChar} - продолжить поиск;
+{changeParametersKeyChar} - сменить параметры поиска;
+любая другая клавиша - выход.");
+                    var response = Console.ReadKey();
+                    Console.WriteLine();
+                    if (response.KeyChar == continueKeyChar)
                     {
-                        Console.WriteLine(domainItem + Environment.NewLine);
+                        foreach (var topicsSearchInfo in topicsSearchInfos)
+                        {
+                            topicsSearchInfo.CurrentLastOffset -= grabMessagesCount;
+                        }
+                        
+                        continue;
                     }
-                }
 
-                var lastMessage = lastMessagesFromPartitions.OrderBy(p => p.Timestamp).Last();
-                Console.WriteLine($"Всего просканировано {scannedMessagesCount} cообщений. Дата самого раннего: {lastMessage.Timestamp}");
-                Console.WriteLine($"Желаете продолжить поиск? Нажмите y, если да. Иначе любую другую клавишу");
-                var response = Console.ReadKey();
-                Console.WriteLine();
-                if (response.KeyChar != 'y')
-                {
+                    if (response.KeyChar == changeParametersKeyChar)
+                    {
+                        break;
+                    }
+
                     Console.WriteLine("Поиск завершен.");
                     return;
-                }
-
-                foreach (var topicsSearchInfo in topicsSearchInfos)
-                {
-                    topicsSearchInfo.CurrentLastOffset -= grabMessagesCount;
                 }
             }
         }
